@@ -1,0 +1,5 @@
+{
+  "name": "Copy of BioParser Pro",
+  "description": "A scientific metadata extraction tool designed to parse XML data sources like Europe PMC, extracting author emails and affiliations for research analysis.",
+  "requestFramePermissions": []
+}

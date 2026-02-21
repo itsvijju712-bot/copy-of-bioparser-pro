@@ -1,4 +1,5 @@
 import { ExtractedRecord, ParserResult } from '../../types';
+import { normalizeExtractedText, trimTrailingFullStop } from './textNormalization';
 
 // Regex matching the Python one: r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
@@ -26,8 +27,6 @@ export const parseEuropePMC = async (xmlContent: string): Promise<ParserResult> 
       // However, usually iterating top-level nodes is safer for performance.
       // Let's assume a standard structure but be robust like the Python script.
       
-      const allElements = xmlDoc.getElementsByTagName("*");
-      
       // In DOM, we don't have a direct equivalent to python's element.iter() that treats every node as a potential article root easily
       // without checking context. 
       // Strategy: Find all nodes that have <author> children.
@@ -53,7 +52,7 @@ export const parseEuropePMC = async (xmlContent: string): Promise<ParserResult> 
         for (let i = 0; i < allArticleDescendants.length; i++) {
           const el = allArticleDescendants[i];
           if (el.tagName.toLowerCase().includes("title") && el.textContent?.trim()) {
-            title = el.textContent.trim();
+            title = trimTrailingFullStop(el.textContent ?? '');
             break; // Found the first title-like element
           }
         }
@@ -72,7 +71,7 @@ export const parseEuropePMC = async (xmlContent: string): Promise<ParserResult> 
           for (let j = 0; j < authorDescendants.length; j++) {
             const el = authorDescendants[j];
             const tag = el.tagName.toLowerCase();
-            const text = el.textContent?.trim();
+            const text = normalizeExtractedText(el.textContent ?? '');
 
             if (!text) continue;
 
@@ -86,7 +85,7 @@ export const parseEuropePMC = async (xmlContent: string): Promise<ParserResult> 
           }
 
           if (firstName && lastName && affiliations.length > 0) {
-            const fullName = `${firstName} ${lastName}`;
+            const fullName = normalizeExtractedText(`${firstName} ${lastName}`);
 
             for (const aff of affiliations) {
               const emails = aff.match(EMAIL_REGEX);
@@ -100,7 +99,7 @@ export const parseEuropePMC = async (xmlContent: string): Promise<ParserResult> 
                     uniqueKeys.add(recordKey);
                     rows.push({
                       id: crypto.randomUUID(),
-                      title: title,
+                      title,
                       author: fullName,
                       email: email,
                       source: 'Europe PMC'

@@ -16,7 +16,8 @@ export const downloadCSV = (data: ExtractedRecord[], filename: string) => {
     })
   ];
 
-  const csvString = csvRows.join("\n");
+  // Prefix UTF-8 BOM so Excel preserves non-ASCII characters correctly.
+  const csvString = `\uFEFF${csvRows.join("\n")}`;
   
   // Create a blob and trigger download
   const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });

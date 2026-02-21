@@ -1,8 +1,9 @@
 import { ExtractedRecord, ParserResult } from '../../types';
+import { normalizeExtractedText } from './textNormalization';
 
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
-const normalizeWhitespace = (value: string) => value.replace(/\s+/g, ' ').trim();
+const normalizeWhitespace = (value: string) => normalizeExtractedText(value);
 
 const normalizeHeader = (value: string) => normalizeWhitespace(value).toLowerCase();
 

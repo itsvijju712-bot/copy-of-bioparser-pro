@@ -7,6 +7,42 @@ import { parseMdpiTxt } from './services/parsers/mdpiTxtParser';
 import { DataTable } from './components/DataTable';
 import { SourceSelector } from './components/SourceSelector';
 
+const decodeUtf16Be = (bytes: Uint8Array) => {
+  const swapped = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i += 2) {
+    swapped[i] = bytes[i + 1] ?? 0;
+    swapped[i + 1] = bytes[i] ?? 0;
+  }
+  return new TextDecoder('utf-16le').decode(swapped);
+};
+
+const readFileText = async (file: File) => {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return new TextDecoder('utf-8').decode(bytes.subarray(3));
+  }
+
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return new TextDecoder('utf-16le').decode(bytes.subarray(2));
+  }
+
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return decodeUtf16Be(bytes.subarray(2));
+  }
+
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    try {
+      return new TextDecoder('windows-1252').decode(bytes);
+    } catch {
+      return new TextDecoder('utf-8').decode(bytes);
+    }
+  }
+};
+
 const App: React.FC = () => {
   const [selectedSource, setSelectedSource] = useState<DataSourceType>(DataSourceType.EUROPE_PMC);
   const [isParsing, setIsParsing] = useState(false);
@@ -69,7 +105,7 @@ const App: React.FC = () => {
     setData([]);
 
     try {
-      const text = await file.text();
+      const text = await readFileText(file);
       
       let result;
       // Strategy pattern for future parsers

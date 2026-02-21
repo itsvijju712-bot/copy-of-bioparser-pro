@@ -1,5 +1,5 @@
 import { ExtractedRecord, ParserResult } from '../../types';
-import { normalizeExtractedText } from './textNormalization';
+import { normalizeExtractedText, trimTrailingFullStop } from './textNormalization';
 
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
@@ -125,7 +125,7 @@ export const parseMdpiTxt = async (txtContent: string): Promise<ParserResult> =>
       for (const row of rows) {
         totalProcessed += 1;
 
-        const title = normalizeWhitespace(row[titleIndex] ?? '');
+        const title = trimTrailingFullStop(row[titleIndex] ?? '');
         const authors = splitAuthors(row[authorIndex] ?? '');
         const emails = splitEmails(row[emailIndex] ?? '');
 

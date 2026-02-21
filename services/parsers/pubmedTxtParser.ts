@@ -1,7 +1,9 @@
 import { ExtractedRecord, ParserResult } from '../../types';
-import { normalizeExtractedText } from './textNormalization';
+import { normalizeExtractedText, trimTrailingFullStop } from './textNormalization';
 
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+const NON_AUTHOR_CONTACT_REGEX = /(?:permission|permissions|reprint|reprints|membership|epub)/i;
+const NON_AUTHOR_DOMAIN_REGEX = /(?:benthamscience\.net)$/i;
 
 const normalizeWhitespace = (value: string) => normalizeExtractedText(value);
 
@@ -23,30 +25,118 @@ const formatAuthorName = (raw: string) => {
 const normalizeForMatch = (value: string) =>
   value.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-const getLastName = (name: string) => {
-  const parts = name.split(' ').filter(Boolean);
-  return parts.length > 0 ? parts[parts.length - 1] : name;
+const normalizeAlpha = (value: string) =>
+  value.toLowerCase().replace(/[^a-z]/g, '');
+
+const getAlphaTokens = (value: string) =>
+  value
+    .toLowerCase()
+    .split(/[^a-z]+|\d+/)
+    .map(token => token.trim())
+    .filter(Boolean);
+
+const getEmailLocalTokens = (email: string) =>
+  getAlphaTokens(email.split('@')[0] ?? '').map(token => normalizeForMatch(token));
+
+const isNonAuthorContactEmail = (email: string) => {
+  const lower = email.toLowerCase();
+  const [local = '', domain = ''] = lower.split('@');
+  if (NON_AUTHOR_DOMAIN_REGEX.test(domain)) return true;
+  if (local.includes('journals.permissions')) return true;
+  return NON_AUTHOR_CONTACT_REGEX.test(local);
 };
 
-const findAuthorMatch = (email: string, authors: string[], unusedAuthors?: Set<string>) => {
-  const localPart = normalizeForMatch(email.split('@')[0] ?? '');
-  let best: string | null = null;
-  let bestScore = 0;
+const getAuthorNameSignals = (authorName: string) => {
+  const parts = authorName
+    .split(' ')
+    .map(part => normalizeForMatch(part))
+    .filter(Boolean);
+  const lastName = parts.length > 0 ? parts[parts.length - 1] : '';
+  const givenNames = parts.slice(0, -1);
+  const givenInitials = givenNames.map(part => part[0]).join('');
+  const allInitials = parts.map(part => part[0]).join('');
 
-  for (const author of authors) {
-    if (unusedAuthors && !unusedAuthors.has(author)) continue;
-    const lastName = normalizeForMatch(getLastName(author));
-    if (!lastName) continue;
-    if (localPart.includes(lastName)) {
-      const score = lastName.length;
-      if (score > bestScore) {
-        best = author;
-        bestScore = score;
-      }
+  return {
+    lastName,
+    givenNames,
+    givenInitials,
+    allInitials
+  };
+};
+
+const getShortNameSignals = (shortName: string) => {
+  const alphaTokens = getAlphaTokens(shortName).map(token => normalizeForMatch(token)).filter(Boolean);
+  const compact = alphaTokens.join('');
+  const surname = alphaTokens.length > 0 ? alphaTokens[0] : '';
+  const initials = alphaTokens.length > 1 ? alphaTokens.slice(1).join('') : '';
+  const initialBeforeSurname = initials && surname ? `${initials}${surname}` : '';
+  const surnameBeforeInitial = initials && surname ? `${surname}${initials}` : '';
+  return { compact, initials, initialBeforeSurname, surnameBeforeInitial };
+};
+
+const scoreAuthorEmailMatch = (email: string, authorName: string, shortNames: string[] = []) => {
+  const local = email.split('@')[0] ?? '';
+  const localAlnum = normalizeForMatch(local);
+  const localTokens = getEmailLocalTokens(email);
+  const localAlphaTokens = getAlphaTokens(local);
+  const { lastName, givenNames, givenInitials, allInitials } = getAuthorNameSignals(authorName);
+
+  let score = 0;
+
+  for (const token of localTokens) {
+    if (!token) continue;
+    if (token === lastName) score = Math.max(score, 120);
+    if (lastName && token.startsWith(lastName)) score = Math.max(score, 110);
+    if (lastName && token.endsWith(lastName)) score = Math.max(score, 105);
+    if (lastName && lastName.startsWith(token) && token.length >= 4) score = Math.max(score, 95);
+    if (lastName && lastName.length >= 4 && token.includes(lastName)) score = Math.max(score, 90);
+    if (givenNames.includes(token)) score = Math.max(score, 85);
+    if (allInitials && token === allInitials && token.length >= 2) score = Math.max(score, 108);
+    if (givenInitials && lastName && token === `${givenInitials}${lastName}`) score = Math.max(score, 112);
+    if (givenInitials && lastName && token === `${lastName}${givenInitials}`) score = Math.max(score, 110);
+    if (
+      givenInitials &&
+      lastName &&
+      givenInitials.length >= 1 &&
+      token === `${givenInitials[0]}${lastName}`
+    ) {
+      score = Math.max(score, 111);
     }
   }
 
-  return best;
+  for (const token of localAlphaTokens) {
+    const normalized = normalizeForMatch(token);
+    if (!normalized) continue;
+    if (allInitials && normalized === allInitials) score = Math.max(score, 108);
+    if (lastName && normalized.startsWith(lastName)) score = Math.max(score, 110);
+    if (lastName && normalized.endsWith(lastName)) score = Math.max(score, 105);
+  }
+
+  for (const shortName of shortNames) {
+    const { compact, initials, initialBeforeSurname, surnameBeforeInitial } = getShortNameSignals(shortName);
+    if (compact && localAlnum.includes(compact)) score = Math.max(score, 114);
+    if (initials && initials.length >= 2 && localAlnum.includes(initials)) score = Math.max(score, 102);
+    if (initialBeforeSurname && localAlnum.includes(initialBeforeSurname)) score = Math.max(score, 116);
+    if (surnameBeforeInitial && localAlnum.includes(surnameBeforeInitial)) score = Math.max(score, 113);
+  }
+
+  return score;
+};
+
+const findAuthorMatch = (email: string, authors: string[], unusedAuthors?: Set<string>) => {
+  let best: string | null = null;
+  let bestScore = -1;
+
+  for (const author of authors) {
+    if (unusedAuthors && !unusedAuthors.has(author)) continue;
+    const score = scoreAuthorEmailMatch(email, author);
+    if (score > bestScore) {
+      best = author;
+      bestScore = score;
+    }
+  }
+
+  return bestScore > 0 ? best : null;
 };
 
 const buildRecords = (
@@ -58,9 +148,14 @@ const buildRecords = (
   options?: { strictMatch?: boolean }
 ) => {
   const rows: ExtractedRecord[] = [];
-  const normalizedTitle = normalizeWhitespace(title);
+  const normalizedTitle = trimTrailingFullStop(title);
   const cleanedAuthors = dedupe(authors.map(formatAuthorName).filter(Boolean));
-  const cleanedEmails = dedupe(emails.map(email => email.trim()).filter(Boolean));
+  const cleanedEmails = dedupe(
+    emails
+      .map(email => email.trim())
+      .filter(Boolean)
+      .filter(email => !isNonAuthorContactEmail(email))
+  );
   const strictMatch = options?.strictMatch ?? false;
 
   if (!normalizedTitle || cleanedAuthors.length === 0 || cleanedEmails.length === 0) {
@@ -132,9 +227,9 @@ const parseMedline = (text: string): ParserResult => {
   let totalProcessed = 0;
 
   let titleParts: string[] = [];
-  let authors: { name: string; affiliations: string[] }[] = [];
-  let currentAuthor: { name: string; affiliations: string[] } | null = null;
-  let currentTag: 'TI' | 'FAU' | 'AD' | null = null;
+  let authors: { name: string; shortNames: string[]; affiliations: string[] }[] = [];
+  let currentAuthor: { name: string; shortNames: string[]; affiliations: string[] } | null = null;
+  let currentTag: 'TI' | 'FAU' | 'AU' | 'AD' | null = null;
 
   const flushRecord = () => {
     const hasContent = titleParts.length > 0 || authors.length > 0;
@@ -142,17 +237,92 @@ const parseMedline = (text: string): ParserResult => {
 
     totalProcessed += 1;
 
-    const title = normalizeWhitespace(titleParts.join(' '));
+    const title = trimTrailingFullStop(titleParts.join(' '));
+    if (!title) {
+      titleParts = [];
+      authors = [];
+      currentAuthor = null;
+      currentTag = null;
+      return;
+    }
 
-    for (const author of authors) {
-      const electronicEmails = extractElectronicEmails(author.affiliations);
-      const affiliationEmails = extractEmails(author.affiliations.join(' '));
-      const fallbackEmails = electronicEmails.length > 0 ? electronicEmails : affiliationEmails;
-      if (fallbackEmails.length === 0) continue;
-      const email = fallbackEmails[fallbackEmails.length - 1];
-      if (!email) continue;
+    const preparedAuthors = authors
+      .map(author => {
+        const formattedName = formatAuthorName(author.name);
+        if (!formattedName) return null;
 
-      const authorName = formatAuthorName(author.name);
+        const normalizedShortNames = dedupe(
+          author.shortNames.map(value => normalizeWhitespace(value)).filter(Boolean)
+        );
+        const electronicEmails = extractElectronicEmails(author.affiliations);
+        const affiliationEmails = extractEmails(author.affiliations.join(' '));
+        const candidateEmails = dedupe(
+          (electronicEmails.length > 0 ? electronicEmails : affiliationEmails)
+            .map(email => email.trim().toLowerCase())
+            .filter(Boolean)
+            .filter(email => !isNonAuthorContactEmail(email))
+        );
+
+        return {
+          name: formattedName,
+          shortNames: normalizedShortNames,
+          candidateEmails
+        };
+      })
+      .filter((author): author is { name: string; shortNames: string[]; candidateEmails: string[] } => !!author);
+
+    if (preparedAuthors.length === 0) {
+      titleParts = [];
+      authors = [];
+      currentAuthor = null;
+      currentTag = null;
+      return;
+    }
+
+    const emailToOwnerIndices = new Map<string, Set<number>>();
+    preparedAuthors.forEach((author, index) => {
+      for (const email of author.candidateEmails) {
+        if (!emailToOwnerIndices.has(email)) {
+          emailToOwnerIndices.set(email, new Set<number>());
+        }
+        emailToOwnerIndices.get(email)!.add(index);
+      }
+    });
+
+    const assignEmailToAuthor = (email: string, ownerIndices: Set<number>) => {
+      let bestIndex = -1;
+      let bestScore = -1;
+
+      for (let index = 0; index < preparedAuthors.length; index += 1) {
+        const author = preparedAuthors[index];
+        let score = scoreAuthorEmailMatch(email, author.name, author.shortNames);
+        if (ownerIndices.has(index)) {
+          score += 2;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          bestIndex = index;
+        }
+      }
+
+      if (bestIndex >= 0 && bestScore > 0) {
+        return preparedAuthors[bestIndex].name;
+      }
+
+      if (ownerIndices.size === 1) {
+        const onlyOwner = Array.from(ownerIndices)[0];
+        return preparedAuthors[onlyOwner]?.name ?? null;
+      }
+
+      if (preparedAuthors.length === 1) {
+        return preparedAuthors[0].name;
+      }
+
+      return null;
+    };
+
+    for (const [email, ownerIndices] of emailToOwnerIndices.entries()) {
+      const authorName = assignEmailToAuthor(email, ownerIndices);
       if (!authorName) continue;
 
       const recordKey = `${title}|${authorName}|${email}`;
@@ -198,8 +368,16 @@ const parseMedline = (text: string): ParserResult => {
         titleParts.push(value);
       } else if (tag === 'FAU') {
         currentTag = 'FAU';
-        currentAuthor = { name: value, affiliations: [] };
+        currentAuthor = { name: value, shortNames: [], affiliations: [] };
         authors.push(currentAuthor);
+      } else if (tag === 'AU') {
+        currentTag = 'AU';
+        if (currentAuthor) {
+          currentAuthor.shortNames.push(value);
+        } else {
+          currentAuthor = { name: value, shortNames: [value], affiliations: [] };
+          authors.push(currentAuthor);
+        }
       } else if (tag === 'AD') {
         currentTag = 'AD';
         if (currentAuthor) {
@@ -217,6 +395,13 @@ const parseMedline = (text: string): ParserResult => {
         titleParts[titleParts.length - 1] = `${titleParts[titleParts.length - 1]} ${continuation}`.trim();
       } else if (currentTag === 'FAU' && currentAuthor) {
         currentAuthor.name = `${currentAuthor.name} ${continuation}`.trim();
+      } else if (currentTag === 'AU' && currentAuthor) {
+        if (currentAuthor.shortNames.length === 0) {
+          currentAuthor.shortNames.push(continuation);
+        } else {
+          const lastIndex = currentAuthor.shortNames.length - 1;
+          currentAuthor.shortNames[lastIndex] = `${currentAuthor.shortNames[lastIndex]} ${continuation}`.trim();
+        }
       } else if (currentTag === 'AD' && currentAuthor && currentAuthor.affiliations.length > 0) {
         const lastIndex = currentAuthor.affiliations.length - 1;
         currentAuthor.affiliations[lastIndex] = `${currentAuthor.affiliations[lastIndex]} ${continuation}`.trim();
@@ -224,12 +409,13 @@ const parseMedline = (text: string): ParserResult => {
       continue;
     }
 
-    if (currentTag === 'AD' && currentAuthor && extractEmails(line).length > 0) {
+    const untaggedLine = line.trim();
+    if (currentTag === 'AD' && currentAuthor && untaggedLine) {
       if (currentAuthor.affiliations.length === 0) {
-        currentAuthor.affiliations.push(line.trim());
+        currentAuthor.affiliations.push(untaggedLine);
       } else {
         const lastIndex = currentAuthor.affiliations.length - 1;
-        currentAuthor.affiliations[lastIndex] = `${currentAuthor.affiliations[lastIndex]} ${line.trim()}`.trim();
+        currentAuthor.affiliations[lastIndex] = `${currentAuthor.affiliations[lastIndex]} ${untaggedLine}`.trim();
       }
       continue;
     }

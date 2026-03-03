@@ -48,7 +48,7 @@ const App: React.FC = () => {
   const [isParsing, setIsParsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<ExtractedRecord[]>([]);
-  const [fileName, setFileName] = useState<string | null>(null);
+  const [fileLabel, setFileLabel] = useState<string | null>(null);
 
   const uniqueEmailData = useMemo(() => {
     const seen = new Set<string>();
@@ -96,37 +96,52 @@ const App: React.FC = () => {
   })();
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const fileList = event.currentTarget.files;
+    if (!fileList?.length) return;
+    const files: File[] = [];
+    for (let index = 0; index < fileList.length; index += 1) {
+      const file = fileList.item(index);
+      if (file) {
+        files.push(file);
+      }
+    }
 
-    setFileName(file.name);
+    setFileLabel(files.length === 1 ? files[0].name : `${files.length} files selected`);
     setError(null);
     setIsParsing(true);
     setData([]);
 
     try {
-      const text = await readFileText(file);
-      
-      let result;
-      // Strategy pattern for future parsers
-      switch (selectedSource) {
-        case DataSourceType.EUROPE_PMC:
-          result = await parseEuropePMC(text);
-          break;
-        case DataSourceType.PUBMED:
-          result = await parsePubMedTxt(text);
-          break;
-        case DataSourceType.MDPI:
-          result = await parseMdpiTxt(text);
-          break;
-        default:
-          throw new Error("Parser not implemented yet.");
+      const allRecords: ExtractedRecord[] = [];
+
+      for (const file of files) {
+        const text = await readFileText(file);
+
+        let result;
+        switch (selectedSource) {
+          case DataSourceType.EUROPE_PMC:
+            result = await parseEuropePMC(text);
+            break;
+          case DataSourceType.PUBMED:
+            result = await parsePubMedTxt(text);
+            break;
+          case DataSourceType.MDPI:
+            result = await parseMdpiTxt(text);
+            break;
+          default:
+            throw new Error("Parser not implemented yet.");
+        }
+
+        allRecords.push(...result.records);
       }
 
-      if (result.records.length === 0) {
-        setError("No authors with emails found in this file.");
+      if (allRecords.length === 0) {
+        setError(files.length === 1
+          ? "No authors with emails found in this file."
+          : "No authors with emails found in the selected files."
+        );
       } else {
-        setData(result.records);
+        setData(allRecords);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to parse file.");
@@ -135,12 +150,12 @@ const App: React.FC = () => {
     }
     
     // Reset input
-    event.target.value = '';
+    event.currentTarget.value = '';
   };
 
   const handleClear = () => {
     setData([]);
-    setFileName(null);
+    setFileLabel(null);
     setError(null);
   };
 
@@ -211,6 +226,7 @@ const App: React.FC = () => {
                 type="file" 
                 className="hidden" 
                 accept={sourceUiConfig.acceptType}
+                multiple
                 onChange={handleFileChange}
                 disabled={isParsing}
               />
@@ -251,8 +267,8 @@ const App: React.FC = () => {
                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center gap-3">
                     <div className="bg-blue-100 p-2 rounded-lg"><FileText className="h-5 w-5 text-blue-700" /></div>
                     <div>
-                      <p className="text-sm text-slate-500 font-medium">Source File</p>
-                      <p className="text-sm font-bold text-slate-900 truncate max-w-[150px]">{fileName}</p>
+                      <p className="text-sm text-slate-500 font-medium">Source File{fileLabel?.includes('files selected') ? 's' : ''}</p>
+                      <p className="text-sm font-bold text-slate-900 truncate max-w-[150px]">{fileLabel}</p>
                     </div>
                  </div>
                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center gap-3">
